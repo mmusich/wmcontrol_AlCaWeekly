@@ -1,3 +1,5 @@
+#! /usr/bin/env python
+
 '''
 Module containing the functions necessary to interact with the wma.
 Credit and less than optimal code has to be spreaded among lots of people.
@@ -9,56 +11,122 @@ import imp
 import sys
 import pprint
 import time
+import json
 
 try:
-  from PSetTweaks.WMTweak import makeTweak
-  from WMCore.Cache.WMConfigCache import ConfigCache
+    from PSetTweaks.WMTweak import makeTweak
+    from WMCore.Cache.WMConfigCache import ConfigCache
 except:
-  print "Probably no WMClient was set up. Trying to proceed anyway..."
-#-------------------------------------------------------------------------------
+    print "Probably no WMClient was set up. Trying to proceed anyway..."
 
-
-#DBS_URL = "http://cmsdbsprod.cern.ch/cms_dbs_prod_global/servlet/DBSServlet"
-DBS_URL = "https://cmsweb.cern.ch/dbs/prod/global/DBSReader"
-PHEDEX_ADDR = 'https://cmsweb.cern.ch/phedex/datasvc/json/prod/blockreplicas?dataset=%s*'
-
+# DBS_URL = "http://cmsdbsprod.cern.ch/cms_dbs_prod_global/servlet/DBSServlet"
+URL = 'https://cmsweb.cern.ch'
+DBS_URL = URL + '/dbs/prod/global/DBSReader'
+PHEDEX_ADDR = URL + '/phedex/datasvc/json/prod/blockreplicas?dataset=%s*'
 DATABASE_NAME = 'reqmgr_config_cache'
 COUCH_DB_ADDRESS = 'https://cmsweb.cern.ch/couchdb'
 WMAGENT_URL = 'cmsweb.cern.ch'
 DBS3_URL = "/dbs/prod/global/DBSReader/"
 
+
+class ConnectionWrapper():
+    """
+    Wrapper class to re-use existing connection to DBS3Reader
+    """
+    def __init__(self):
+      ##TO-DO:
+      # add a parameter to pass DBS3 url, in case we want to use different address
+        self.connection = None
+        self.connection_attempts = 3
+        self.wmagenturl = 'cmsweb.cern.ch'
+        self.dbs3url = '/dbs/prod/global/DBSReader/'
+
+    def refresh_connection(self, url):
+        self.connection = init_connection(url)
+
+    def abort(self, reason=""):
+        raise Exception("Something went wrong. Aborting. " + reason)
+
+    def api(self, method, field, value, detail=False, post=False):
+        """Constructs query and returns DBS3 response
+        """
+        if not self.connection:
+            self.refresh_connection(self.wmagenturl)
+
+        # this way saves time for creating connection per every request
+        for i in range(self.connection_attempts):
+            try:
+                if post:
+                    params = {}
+                    params[field] = value
+                    res = httppost(self.connection, self.dbs3url +
+                                       method, params).replace("'", '"')
+                else:
+                    if detail:
+                        res = httpget(self.connection, self.dbs3url
+                                          + "%s?%s=%s&detail=%s"
+                                          % (method, field, value, detail))
+                    else:
+                        res = httpget(self.connection, self.dbs3url +
+                                          "%s?%s=%s" % (method, field, value))
+                break
+            except Exception:
+                # most likely connection terminated
+                self.refresh_connection(self.wmagenturl)
+        try:
+            return json.loads(res)
+        except:
+            self.abort("Could not load the answer from DBS3: " + self.dbs3url
+                       + "%s?%s=%s&detail=%s" % (method, field, value, detail))
+
 def testbed(to_url):
-  global COUCH_DB_ADDRESS
-  global WMAGENT_URL
-  global DBS3_URL
-  WMAGENT_URL = to_url
-  #WMAGENT_URL = 'cmsweb-testbed.cern.ch'
-  #WMAGENT_URL = 'sryu-dev01.cern.ch'
-  COUCH_DB_ADDRESS = 'https://%s/couchdb'%( WMAGENT_URL )
-  DBS3_URL = "/dbs/int/global/DBSReader/"
+    global COUCH_DB_ADDRESS
+    global WMAGENT_URL
+    global DBS3_URL
+    WMAGENT_URL = to_url
+    # WMAGENT_URL = 'cmsweb-testbed.cern.ch'
+    # WMAGENT_URL = 'sryu-dev01.cern.ch'
+    COUCH_DB_ADDRESS = 'https://%s/couchdb' % (WMAGENT_URL)
+    DBS3_URL = '/dbs/int/global/DBSReader/'
 
-#-------------------------------------------------------------------------------
 
-def generic_get(base_url, query):
-    headers  =  {"Content-type": "application/json"}
-    conn  =  httplib.HTTPSConnection(base_url, cert_file = os.getenv('X509_USER_PROXY'), key_file = os.getenv('X509_USER_PROXY'))
-    conn.request("GET", query.replace("#", "%23"))
-    #print "getting",base_url,query,"..."
-    response = conn.getresponse()
-    
+def init_connection(url):
+    return httplib.HTTPSConnection(url, port=443,
+                                   cert_file=os.getenv('X509_USER_PROXY'),
+                                   key_file=os.getenv('X509_USER_PROXY'))
+
+
+def httpget(conn, query):
+    conn.request("GET", query.replace('#', '%23'))
+    try:
+        response = conn.getresponse()
+    except httplib.BadStatusLine:
+        raise RuntimeError('Something is really wrong')
     if response.status != 200:
-        print "Problems quering DBS3 RESTAPI: %s" %(base_url+query.replace("#", "%23"))
-        data = None
-    else:
-        data = response.read()
-        #print "...got",data
-    return data
+        print "Problems quering DBS3 RESTAPI with %s: %s" % (
+            # where does base_url come from ? FIX
+            base_url + query.replace('#', '%23'), response.read())
+        return None
+    return response.read()
 
-#-------------------------------------------------------------------------------
+
+def httppost(conn, where, params):
+    headers = {"Content-type": "application/json", "Accept": "text/plain"}
+    conn.request("POST", where, json.dumps(params), headers)
+    try:
+        response = conn.getresponse()
+    except httplib.BadStatusLine:
+        raise RuntimeError('Something is really wrong')
+    if response.status != 200:
+        print "Problems quering DBS3 RESTAPI with %s: %s" % (
+            params, response.read())
+        return None
+    return response.read()
+
 
 def __check_GT(gt):
     if not gt.endswith("::All"):
-        raise Exception,"It seemslike the name of the GT '%s' has a typo in it!" %gt
+        print "It seemslike the name of the GT '%s' has a typo in it, missing the final ::All which will crash your job. If insted you're using CondDBv2, you're fine." %gt
 
 def __check_input_dataset(dataset):
     if dataset and dataset.count('/')!=3:
@@ -99,7 +167,7 @@ def approveRequest(url,workflow,encodeDict=False):
     conn.close()
     print 'Approved workflow:',workflow
     return
-    
+
 #-------------------------------------------------------------------------------
 
 def __loadConfig(configPath):
@@ -117,18 +185,16 @@ def __loadConfig(configPath):
 
     print "done."
     return loadedConfig
-    
-#-------------------------------------------------------------------------------    
+
+#-------------------------------------------------------------------------------
 # DP leave this untouched even if less than optimal!
 def makeRequest(url,params,encodeDict=False):
-
     __check_request_params(params)
     for (k,v) in params.items():
       if type(v) ==dict:
         encodeDict=True
         print "Re-encoding for nested dicts"
         break
-      
     if encodeDict:
         import json
         jsonEncodedParams = {}
@@ -147,8 +213,8 @@ def makeRequest(url,params,encodeDict=False):
     data = response.read()
     if response.status != 303:
         print 'could not post request with following parameters:'
-        #pprint.pprint( params )
-        #print
+        pprint.pprint( params )
+        print
         for item in params.keys():
             print item + ": " + str(params[item])
         print 'Response from http call:'
@@ -167,14 +233,14 @@ def makeRequest(url,params,encodeDict=False):
 def upload_to_couch(cfg_name, section_name,user_name,group_name,test_mode=False,url=None):
   if test_mode:
     return "00000000000000000"
-      
+
   if not os.path.exists(cfg_name):
     raise RuntimeError( "Error: Can't locate config file %s." %cfg_name)
 
   # create a file with the ID inside to avoid multiple injections
   oldID=cfg_name+'.couchID'
   #print oldID
-  #print 
+  #print
   if os.path.exists(oldID):
       f=open(oldID)
       the_id=f.readline().replace('\n','')
@@ -188,7 +254,7 @@ def upload_to_couch(cfg_name, section_name,user_name,group_name,test_mode=False,
     #just try again !!
     time.sleep(2)
     loadedConfig = __loadConfig(cfg_name)
-    
+
   where=COUCH_DB_ADDRESS
   if url:      where=url
   configCache = ConfigCache(where, DATABASE_NAME)
@@ -198,18 +264,17 @@ def upload_to_couch(cfg_name, section_name,user_name,group_name,test_mode=False,
   configCache.setLabel(section_name)
   configCache.setDescription(section_name)
   configCache.save()
-  
+
   print "Added file to the config cache:"
   print "  DocID:    %s" % configCache.document["_id"]
   print "  Revision: %s" % configCache.document["_rev"]
-  
+
   f=open(oldID,"w")
   f.write(configCache.document["_id"])
   f.close()
   return configCache.document["_id"]
-  
-#-------------------------------------------------------------------------------  
-  
+
+#-------------------------------------------------------------------------------
 
 def time_per_events(campaign):
   ### ad-hoc method until something better comes up to define the time per event in injection time

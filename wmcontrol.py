@@ -22,8 +22,10 @@ import pprint
 import ConfigParser
 import traceback
 import re
+import time
 
 sys.path.append(os.path.join(sys.path[0], 'modules'))
+from modules import helper
 from modules import wma # here u have all the components to interact with the wma
 
 #-------------------------------------------------------------------------------
@@ -39,8 +41,9 @@ default_parameters = {
 'keep_step2':False,
 'priority':181983,
 'request_type':'ReReco',
-'scramarch':'slc5_amd64_gcc462', 
-'includeparents': 'False'
+'scramarch':'slc5_amd64_gcc462',
+'includeparents': 'False',
+'multicore': 1
   }
 
 if os.getenv('SCRAM_ARCH'):
@@ -60,19 +63,20 @@ class ExtendedOption (optparse.Option):
     else:
       optparse.Option.take_action(self, action, dest, opt, value, values, parser)
 
-
-    
 #-------------------------------------------------------------------------------
 
 class Configuration:
     '''
-    A class that offers a common interface to get parameters out of a 
+    A class that offers a common interface to get parameters out of a
     optionParser (command line) or a ConfigParser (ini cfg).
-    The key is to build a ConfigParser object with a single section out 
+    The key is to build a ConfigParser object with a single section out
     of the option parser.
     '''
+
     default_section= '__OptionParser__'
     def __init__ (self, parser):
+        # assume you have a .conf input file, first...
+        # see : https://docs.python.org/2/library/configparser.html
         self.configparser=ConfigParser.SafeConfigParser()
 
         try:
@@ -81,32 +85,35 @@ class Configuration:
             print "Error in parsing options"
             sys.stderr.write("[wmcontrol exception] Error in parsing options")
             sys.exit(-1)
-            
+
         global test_mode
-        test_mode=options.test
+        test_mode = test_mode or options.test
 
         if options.wmtest:
             print "Setting to injection in cmswebtest : ", options.wmtesturl
             wma.testbed(options.wmtesturl)
-            
+
         if options.req_file != '' and options.req_file !=None:
             cfg_filename=options.req_file
             print "We have a configfile: %s." %cfg_filename
             self.configparser.read(cfg_filename)
-        else: #we have to convert an option parser to a cfg
+        else: # ... otherwise, we have to convert the command line option parser to a .conf, and populate self.configparser
             print "We have a commandline."
             self.__fill_configparser(options)
 
+
+
     def __fill_configparser(self,options):
         '''
-        Convert the option parser into a configparser.
+        Convert the option parser (from command line) into a configparser (as if it was .conf file).
         '''
         # loop on all option parser parameters and fille the cp
         self.configparser.add_section(self.__class__.default_section)
         for param,param_value in options.__dict__.items():
-          if param_value == None: 
+          if param_value == None:
             param_value = "__NOT-DEFINED__"
           #print "Setting params in cfg: %s with default %s" %(param,param_value)
+          ### HOLLY SHIT THE SYSTEMATIC RECASTING TO STR
           self.configparser.set(self.__class__.default_section, param, str(param_value))
         #with open('example.cfg', 'wb') as configfile:
             #self.ConfigParser.write(configfile)
@@ -119,7 +126,7 @@ class Configuration:
         if verbose:
           print "I am looking for section %s and option %s, the default is #%s#" %(name, section, default)
         if self.configparser.has_section(section):
-          if self.configparser.has_option(section,name): 
+          if self.configparser.has_option(section,name):
             #print "Getting %s %s" %(section,name)
             ret_val = self.configparser.get(section,name)
             # We had a cfg file and the default was not given
@@ -129,117 +136,22 @@ class Configuration:
               ret_val = default
             # we have both: read and return!
             else:
-              pass   
+              pass
           else:
-            # We don't have the option, try to return the default            
+            # We don't have the option, try to return the default
             if default!=None:
               # Case 1, we have the default
-              ret_val = default              
+              ret_val = default
             else:
               # Case 2, we do not have the default, exception
               raise Exception ("Parameter %s cannot be found in section %s and no default is given." %(name,section))
         else:
           # No section found, just rais e an exception
           raise Exception ("No section %s found in configuration." %section)
-        
+
         if verbose:
           print "I am returning the value #%s#" %(ret_val)
         return ret_val
-        
-#-------------------------------------------------------------------------------
-
-def get_blocks(dset_name, statistics):
-    statistics = float(statistics)
-    ####
-    ### during the migration, we have been forced to go from one single query to 1+N. If ever someone complains about high query rate
-    ### a) fuck you
-    ### b) https://github.com/dmwm/DBS/issues/280
-    ####
-    sum_blocks = 0
-    #blocks = json.loads(wma.generic_get(wma.WMAGENT_URL, wma.DBS3_URL+"blocks?dataset=%s" %(dset_name))) #get list of all block -> return block_names
-    #n_blocks = len(blocks)
-    #print os.getcwd()
-
-    ### DAS Crap
-    #comm = 'python /afs/cern.ch/cms/PPD/PdmV/tools/wmcontrol/modules/das_client.py --query="block dataset=%s" --format=json --das-headers --limit=0'%(dset_name)
-    # p = subprocess.Popen(comm, shell=True, 
-    #                    stdin=subprocess.PIPE, 
-    #                    stdout=subprocess.PIPE, 
-    #                    stderr=subprocess.STDOUT, 
-    #                    close_fds=True)
-    # das_output = p.stdout.read()
-    # try:
-    #     data = json.loads(das_output)["data"]
-    # except:
-    #         pprint.pprint( das_output)
-    #         raise Exception("What the FUCK is going on ???")
-    
-    # blocks = []
-    # n_blocks= len(data)
-    # for block in data:
-    #     try:
-    #         b = filter(lambda bl : 'nevents' in bl, block["block"])
-    #         if len(b):
-    #             blocks.append({'block_name': b["name"], 'NumberOfEvents': b["nevents"]}) #lets convert DAS data to our used format
-    #         else:
-    #             print block["block"],"has no events"
-    #     except:
-    #         raise Exception("Corrupted DAS data %s"%( pprint.pformat( block["block"] )))
-        
-    #     sum_blocks += b["nevents"]
-    answer = wma.generic_get(wma.WMAGENT_URL, wma.DBS3_URL+"blocks?dataset=%s" %(dset_name)) #get list of all block -> return block_names
-    try:
-        blocks = json.loads( answer )
-    except:
-        #failed to load the json, so assume it's all fine
-        print "Could not load the answer from DBS3 %s"% answer
-        raise Exception("Could not load the answer from DBS3 %s"% answer)
-
-    n_blocks = len(blocks)
-    for block in blocks:
-        #print "a query"
-        return_data = json.loads(wma.generic_get(wma.WMAGENT_URL, wma.DBS3_URL+"blocksummaries?block_name=%s" %(block["block_name"]))) #get a single block's numberOfEvents
-        block["NumberOfEvents"] = return_data[0]["num_event"]
-        sum_blocks += return_data[0]["num_event"]
-
-        
-    if statistics >= float(sum_blocks * 0.95):
-        ## returning an empty list means no block selection
-        print "required statistics (%d) and available (%d) are almost the same"%( statistics , sum_blocks)
-        return []
-
-    ## otherwise try to pick the best set of blocks to make up the number of events desired
-    s_sum = 0
-    s_blocks = []
-    
-    blocks.sort(reverse=True, key= lambda o : o['NumberOfEvents'])
-    while len(blocks) and float(s_sum + blocks[0]['NumberOfEvents']) < statistics:
-        s_sum+= blocks[0]['NumberOfEvents']
-        s_blocks.append(blocks[0])
-        blocks.remove(blocks[0])
-        #print s_sum, s_blocks
-        
-    blocks.sort(key= lambda o : o['NumberOfEvents'])
-    while len(blocks) and float( s_sum + blocks[0]['NumberOfEvents']) < statistics:
-        s_sum+= blocks[0]['NumberOfEvents']
-        s_blocks.append(blocks[0])
-        blocks.remove(blocks[0])
-        #print s_sum, s_blocks
-
-    if len(blocks) and float(s_sum)< statistics:
-        s_sum+=blocks[0]['NumberOfEvents']
-        s_blocks.append(blocks[0])
-        blocks.remove(blocks[0])
-        #print s_sum, s_blocks
-        
-    if len (s_blocks) == n_blocks:
-        print "block selection could not selec a sub-set to achieve the disered statistics. taking all block"
-        return []
-    else:
-        return map(lambda b : str(b['block_name']) , s_blocks)
-    
-
-#-------------------------------------------------------------------------------
 
 def get_runs(dset_name,minrun=-1,maxrun=-1):
     '''
@@ -265,7 +177,8 @@ def get_runs(dset_name,minrun=-1,maxrun=-1):
 #-------------------------------------------------------------------------------
 
 def custodial(datasetpath):
-  
+# not clear if this custodial method is actually used anywhere; otherwise clean it up ?
+
    if test_mode:
      return "custodialSite1"
 
@@ -349,7 +262,7 @@ def custodial(datasetpath):
        sites = sites[:-1]
    for custsite in custodial_sites :
 #       custsites = custsites + custsite + '(' + str(custodial[custsite]) + '),'
-       custsites = custsites + custsite   
+       custsites = custsites + custsite
    if custsites[-1:] == ',' :
        custsites = custsites[:-1]
 
@@ -364,7 +277,7 @@ def custodial(datasetpath):
 
 def random_sleep(min_sleep=1,sigma=1):
     """
-    Sleep for a random time in order not to choke the server submitting too many 
+    Sleep for a random time in order not to choke the server submitting too many
     requests in a small time interval
     """
     rnd=abs(random.gauss(0,sigma))
@@ -376,7 +289,7 @@ def random_sleep(min_sleep=1,sigma=1):
 
 def get_dset_nick(dataset):
     """
-    Create a nickname out of a dataset name. Some heuristic tricks are used to 
+    Create a nickname out of a dataset name. Some heuristic tricks are used to
     make the nicks shorter.
     """
     #print dataset
@@ -387,10 +300,8 @@ def get_dset_nick(dataset):
       nick=nick.replace("Electron","El")
       nick=nick.replace("Single","Sing")
       nick=nick.replace("Double","Dbl")
-    
+
     return nick
-
-
 
 #-------------------------------------------------------------------------------
 
@@ -427,13 +338,12 @@ def get_dataset_runs_dict(section,cfg):
         dataset_runs_dict[cfg.get_param('input_name','',section)]=[]
 
       return  dataset_runs_dict
-      
+
 #-------------------------------------------------------------------------------
 
 def make_request_string(params,service_params,request):
     request_type = service_params['request_type']
     identifier=''
-    print request_type
     dataset=params['InputDataset']
     # Make a string a la prep if needed: #old version
 #    if request == Configuration.default_section:
@@ -445,7 +355,7 @@ def make_request_string(params,service_params,request):
 #                                   custodial(dataset),
 #                                   joinString,
 #                                   service_params['version'])
-#    
+#
 #    elif service_params['req_name'] != '' :
 #      identifier=service_params['req_name']
     if request == Configuration.default_section:
@@ -456,15 +366,15 @@ def make_request_string(params,service_params,request):
             pid=service_params['pid']
 
         joinString = ""
-        if request_type in ['MonteCarloFromGEN', 'MonteCarlo', 'LHEStepZero', 'TaskChain']:          
+        if request_type in ['MonteCarloFromGEN', 'MonteCarlo', 'LHEStepZero', 'TaskChain']:
           joinString = "_v"
           identifier = "%s_%s%s%s_%s" %(pid,
                                    service_params['batch'],
                                    joinString,
                                    service_params['version'],
                                    service_params['process_string'])
-                                   
-        else: 
+
+        else:
           #if custodial(params['InputDataset']):
           #  custname = custodial(dataset)
           #else:
@@ -484,11 +394,11 @@ def make_request_string(params,service_params,request):
         cmssw_version=cmssw_version.replace("CMSSW","")
         cmssw_version=cmssw_version.replace("_","")
         cmssw_version=cmssw_version.replace("patch","p")
-        
+
         identifier = "%s_%s_%s" %(service_params["section"],cmssw_version,dset_nick)
         if len(identifier)>20:
             identifier="%s_%s"%(service_params["section"],cmssw_version)
-        
+
     return identifier
 
 #-------------------------------------------------------------------------------
@@ -496,21 +406,22 @@ def make_request_string(params,service_params,request):
 def loop_and_submit(cfg):
   '''
   Loop on all the sections of the configparser, build and submit the request.
+  This is the orchestra director function.
   '''
   pp = pprint.PrettyPrinter(indent=4)
 
-  
   for section in cfg.configparser.sections():
     # Warning muted
     #print '\n---> Processing request "%s"' %section
     # build the dictionary for the request
     params,service_params = build_params_dict(section,cfg)
     dataset_runs_dict = get_dataset_runs_dict (section,cfg)
-    if (dataset_runs_dict == False):
+    if not dataset_runs_dict:
         sys.stderr.write("[wmcontrol exception] No dataset_runs_dict provided")
         sys.exit(-1)
+
     # Submit request!
-    for dataset in sorted(dataset_runs_dict.keys()):      
+    for dataset in sorted(dataset_runs_dict.keys()):
       params['InputDataset']=dataset
       runs=[]
       new_blocks=[]
@@ -523,36 +434,95 @@ def loop_and_submit(cfg):
           else:
             runs.append(item)
       params['RunWhitelist']=runs
-          
+
       if params.has_key("BlockWhitelist"):
-        if params['BlockWhitelist']==[]:
-          params['BlockWhitelist']=new_blocks
-        if params['BlockWhitelist']!=[] and new_blocks!=[]:
-          print "WARNING: a different set of blocks was made available in the input dataset and in the blocks option."
-          print "Keeping the blocks option (%s) instead of (%s)" % (str(sorted(new_blocks)), str(sorted(params['BlockWhitelist'])))
-          params['BlockWhitelist']=new_blocks
+          if params['BlockWhitelist']==[]:
+              params['BlockWhitelist']=new_blocks
+          if params['BlockWhitelist']!=[] and new_blocks!=[]:
+              print "WARNING: a different set of blocks was made available in the input dataset and in the blocks option."
+              print "Keeping the blocks option (%s) instead of (%s)" % (str(sorted(new_blocks)), str(sorted(params['BlockWhitelist'])))
+              params['BlockWhitelist']=new_blocks
+
+      elif service_params['lumi_list'] != '':
+          params['LumiList'] = service_params['lumi_list']
+
       params['RequestString']= make_request_string(params,service_params,section)
+
       if service_params['request_type'] in ['MonteCarlo','LHEStepZero']:
           params.pop('InputDataset')
           params.pop('RunWhitelist')
       elif service_params['request_type'] == 'TaskChain':
+          ##if we have a global defined input_DS we set it as Task1 input
           if params['InputDataset']:
               params['Task1']['InputDataset'] = params['InputDataset']
-              params.pop('InputDataset')
+
+          ##if we have a taskChain and its First task has inputDS, we do splitting algo
+          ##TO-DO: move to separate method so we would not need to duplicate code
+          if 'InputDataset' in params['Task1']:
+              if params['Task1']['InputDataset'] != '' and 'RequestNumEvents' in params['Task1'] and params['Task1']['RequestNumEvents']:
+                  if test_mode:
+                      t = time.time()
+                  espl = helper.SubsetByLumi(params['Task1']['InputDataset'],
+                                             float(service_params['margin']))
+
+                  if 'FilterEfficiency' in params['Task1']:
+                      __events = float(params['Task1']['RequestNumEvents']) / float(
+                              params['Task1']['FilterEfficiency'])
+                  else:
+                      __events = float(params['Task1']['RequestNumEvents'])
+
+                  split, details = espl.run(int(__events),
+                                            service_params['brute_force'],
+                                            service_params['force_lumis'])
+
+                  if split == 'blocks':
+                      params['Task1']['BlockWhitelist'] = details
+                  elif split == 'lumis':
+                      params['Task1']['LumiList'] = details
+                  elif split == 'dataset':
+                      print "no white listing"
+                  if test_mode:
+                      print "Finished in", int((time.time()-t)*1000), "\bms"
+
           if params['RunWhitelist']:
               params['Task1']['RunWhitelist'] = params['RunWhitelist']
-              params.pop('RunWhitelist')
-          if not params['RunWhitelist']: params.pop('RunWhitelist')
-          if not params['InputDataset']: params.pop('InputDataset')
-      elif service_params['request_type'] in ['ReDigi','ReReco'] and 'RequestNumEvents' in params and (not 'BlockWhitelist' in params or params['BlockWhitelist']==[]):
-          params['BlockWhitelist']= get_blocks( params['InputDataset'] , params['RequestNumEvents'] )
-      elif service_params['request_type'] in ['MonteCarloFromGEN'] and 'RequestNumEvents' in params and (not 'BlockWhitelist' in params or params['BlockWhitelist']==[]):
-          params['BlockWhitelist']= get_blocks( params['InputDataset'] , float(params['RequestNumEvents']) / float(params['FilterEfficiency']) )
 
+          if 'RunWhitelist' in params: #if params has key we remove it
+              params.pop('RunWhitelist') #because it was set as Task parameter
+          if 'InputDataset' in params:
+              params.pop('InputDataset')
+      elif ('RequestNumEvents' in params and 'LumiList' not in params and
+            ('RunWhitelist' not in params or params['RunWhitelist']==[])):
 
-      if test_mode: # just print the parameters of the request you would have injected
-        pp.pprint(params)
-        #print wma.WMAGENT_URL
+          if 'FilterEfficiency' in params:
+              events = float(params['RequestNumEvents'] / float(params['FilterEfficiency']))
+          else:
+              events = float(params['RequestNumEvents'])
+
+          if events:
+              if test_mode:
+                  t = time.time()
+              espl = helper.SubsetByLumi(params['InputDataset'],
+                                         float(service_params['margin']))
+              split, details = espl.run(int(events),
+                                        service_params['brute_force'],
+                                        service_params['force_lumis'])
+              # https://github.com/dmwm/DBS/issues/280
+              # https://github.com/dmwm/DBS/issues/428
+              if split == 'blocks':
+                  params['BlockWhitelist'] = details
+              elif split == 'lumis':
+                  params['LumiList'] = details
+              elif split == 'dataset':
+                  print "no white listing"
+
+                  pass
+              if test_mode:
+                  print "Finished in", int((time.time()-t)*1000), "\bms"
+
+      # just print the parameters of the request you would have injected
+      if test_mode:
+          pp.pprint(params)
       else: # do it for real!
           try:
               workflow = wma.makeRequest(wma.WMAGENT_URL,params,encodeDict=(service_params['request_type']=='TaskChain'))
@@ -583,9 +553,9 @@ def make_cfg_docid_dict(filename):
   '''
   if filename =='':
     return {}
-  
+
   print "Building a cfg-docID dictionary.."
-  
+
   cfg_db_file=None
   try:
     cfg_db_file=open(filename,'r')
@@ -604,7 +574,7 @@ def make_cfg_docid_dict(filename):
       raise Exception('Could not interpret line %s. Too many spaces.' %line)
     # split the line
     cfg_name,docid = line.split(' ')
-    if test_mode: 
+    if test_mode:
       print "Name, DocID in file %s: %s %s"%(filename, cfg_name,docid)
     cfg_docid_dict[cfg_name] = docid
   cfg_db_file.close()
@@ -613,7 +583,7 @@ def make_cfg_docid_dict(filename):
 #-------------------------------------------------------------------------------
 
 def get_user_group(cfg,section):
-  # try to use the environment variables if nothing provided  
+  # try to use the environment variables if nothing provided
   user_env_name ='WMCONTROL_USER'
   group_env_name='WMCONTROL_GROUP'
   user_default =''
@@ -621,22 +591,22 @@ def get_user_group(cfg,section):
   if os.environ.has_key(user_env_name):
     user_default=os.environ[user_env_name]
   if os.environ.has_key(group_env_name):
-    group_default=os.environ[group_env_name]    
+    group_default=os.environ[group_env_name]
   #print os.environ.has_key(user_env_name)
   #print "*", user_default, "*", group_default
   user = cfg.get_param('user',user_default,section)
   group = cfg.get_param('group',group_default,section)
-  
+
   #print "*", user, "*", group
-  
+
   return user, group
-  
+
 #-------------------------------------------------------------------------------
 
 def build_params_dict(section,cfg):
   global couch_pass
   '''
-  Build the parameters dictionary for the request.
+  Build the parameters dictionary for the request. Assumes the presence of an input .conf file or commandline.
   For the moment the defaults of the parameters are stored here.
   Put a dictionary on top?
   '''
@@ -662,7 +632,7 @@ def build_params_dict(section,cfg):
   cfg_db_file = cfg.get_param('cfg_db_file','',section)
   #print cfg_db_file
   cfg_docid_dict = make_cfg_docid_dict(cfg_db_file)
-  
+
   release = cfg.get_param('release','',section)
   globaltag = cfg.get_param('globaltag','',section)
   pileup_dataset = cfg.get_param('pu_dataset','',section)
@@ -671,19 +641,21 @@ def build_params_dict(section,cfg):
   filter_eff = cfg.get_param('filter_eff','',section)
   if not filter_eff:
       filter_eff = 1.0
-      
+
   number_events = int(cfg.get_param('number_events',0,section))
   #number_events = cfg.get_param('number_events',0,section)
   version = cfg.get_param('version','',section)
-  
+
   ##new values for renewed Request Agent
   time_event = float(cfg.get_param('time_event',20,section))
   size_memory = int(float(cfg.get_param('size_memory',2300,section)))
   size_event = int(float(cfg.get_param('size_event',2000,section)))
   if size_event <0:
       size_event = 2000
-      
-  # parameters with fallback  
+
+  multicore = int(float(cfg.get_param('multicore',1,section)))
+
+  # parameters with fallback
   scramarch = cfg.get_param('scramarch',default_parameters['scramarch'],section)
   #group = cfg.get_param('group',default_parameters['group'],section)
   #requestor = cfg.get_param('requestor',default_parameters['requestor'],section)
@@ -691,14 +663,16 @@ def build_params_dict(section,cfg):
   dbsurl = cfg.get_param('dbsurl',default_parameters['dbsurl'],section)
 
   includeparents=cfg.get_param('includeparents',default_parameters['includeparents'],section)
-  
+
   req_name=cfg.get_param('req_name','',section)
   process_string = cfg.get_param('process_string','',section)
+  processing_string = cfg.get_param('processing_string','',section)
   batch = cfg.get_param('batch','',section)
-    
+  open_running_timeout = int(float(cfg.get_param('open_running_timeout','43200',section))) # 12h is legacy
+
   # for the user and group
   user,group = get_user_group(cfg,section)
-  
+
   # for the skims
   skim_cfg = cfg.get_param('skim_cfg','',section)
   skim_docid = cfg.get_param('skim_docID','',section)
@@ -710,33 +684,32 @@ def build_params_dict(section,cfg):
           skim_docid=cfg_docid_dict[skim_cfg]
       else:
           skim_docid=wma.upload_to_couch(skim_cfg, section, user, group,test_mode)
-          
+
   # priority
   priority = cfg.get_param('priority',default_parameters['priority'],section)
-  
-  #blocks
-  blocks = cfg.get_param('blocks', [], section)  
 
-  
+  #blocks
+  blocks = cfg.get_param('blocks', [], section)
+
   # Now the service ones
   # Service
   step1_cfg = cfg_path = ''
-  step1_cfg = cfg_path = cfg.get_param('cfg_path','',section)  
+  step1_cfg = cfg_path = cfg.get_param('cfg_path','',section)
   dummy = cfg.get_param('step1_cfg','',section)
   if dummy != '':
     step1_cfg = cfg_path = dummy
 
   harvest_cfg = cfg.get_param('harvest_cfg','',section)
   harvest_docID = cfg.get_param('harvest_docID','',section)
-  
+
   step1_output = cfg.get_param('step1_output','',section)
   keep_step1 = cfg.get_param('keep_step1',False,section)
-  
+
   step2_cfg = cfg.get_param('step2_cfg','',section)
   step2_docID = cfg.get_param('step2_docID','',section)
   step2_output = cfg.get_param('step2_output','',section)
   keep_step2 = cfg.get_param('keep_step2',False,section)
-  
+
   step3_cfg = cfg.get_param('step3_cfg','',section)
   step3_docID = cfg.get_param('step3_docID','',section)
   step3_output = cfg.get_param('step3_output','',section)
@@ -746,6 +719,11 @@ def build_params_dict(section,cfg):
   request_type = cfg.get_param('request_type',default_parameters['request_type'],section)
   request_id = cfg.get_param('request_id','',section)
   events_per_job = cfg.get_param('events_per_job','',section)
+  events_per_lumi = int(float(cfg.get_param('events_per_lumi',100,section))) # 100 is legacy
+  force_lumis = cfg.get_param('force_lumis', False, section)
+  brute_force = cfg.get_param('brute_force', False, section)
+  margin = cfg.get_param('margin', 0.05, section)
+  lumi_list = cfg.get_param('lumi_list', '', section)
 
   # Upload to couch if needed or check in the cfg dict if there
   docIDs=[step1_docID,step2_docID,step3_docID]
@@ -754,12 +732,12 @@ def build_params_dict(section,cfg):
     step_cfg_name= cfgs[step]
     step_docid = docIDs[step]
     #print step_cfg_name, step_docid
-    
+
     if step_cfg_name!='' and step_docid=='' :
       #print step_cfg_name, step_docid
       # try to see if it is in the cfg name dict
       if cfg_docid_dict.has_key(step_cfg_name):
-        print "Using the one in the cfg-docid dictionary." 
+        print "Using the one in the cfg-docid dictionary."
         docIDs[step] = cfg_docid_dict[step_cfg_name]
       else:
         print "No DocId found for section %s. Uploading the cfg to the couch." %section
@@ -768,27 +746,26 @@ def build_params_dict(section,cfg):
   step1_docID,step2_docID,step3_docID=docIDs
   if harvest_docID=='' and harvest_cfg!='':
       harvest_docID= wma.upload_to_couch(harvest_cfg , section, user, group,test_mode)
-      
+
   # check if the request is valid
-  if step1_docID=='' and url_dict=="":
+  if step1_docID=='' and url_dict=="" and request_type!="DQMHarvest":
     print "Invalid request, no docID configuration specified."
     sys.stderr.write("[wmcontrol exception] Invalid request, no docID configuration specified.")
     sys.exit(-1)
- 
+
   # Extract Campaign from PREP-ID if necessary
   campaign = cfg.get_param('campaign','',section)
   if campaign =="" and request_id=="":
     print "Campaign and request-id are not set. Provide at least the Campaign."
-  elif campaign =="" and request_id!="":    
+  elif campaign =="" and request_id!="":
     campaign = re.match(".*-(.*)-.*",request_id).group(1)
   elif campaign !="" and request_id!="":
     print "Campaign and request-id are set. Using %s as campaign." %campaign
-    
 
   time_per_campaign=wma.time_per_events(campaign)
   if time_per_campaign:
       time_event=time_per_campaign
-  
+
   service_params={"section": section,
                   "version": version,
                   "request_type": request_type,
@@ -807,8 +784,12 @@ def build_params_dict(section,cfg):
                   'req_name': req_name,
                   "batch": batch,
                   "process_string": process_string,
+                  'force_lumis': force_lumis,
+                  'brute_force': brute_force,
+                  'lumi_list': lumi_list,
+                  'margin': margin
                   }
-  
+
   # According to the rerquest type, cook a request!
   params={"CMSSWVersion": release,
           "ScramArch": scramarch,
@@ -829,11 +810,20 @@ def build_params_dict(section,cfg):
           "Memory": size_memory,
           "SizePerEvent": size_event,
           "TimePerEvent": time_event,
-          "OpenRunningTimeout" : 43200,
+          "OpenRunningTimeout" : open_running_timeout,
           #"ConfigCacheUrl": wma.COUCH_DB_ADDRESS,
           #"EnableHarvesting" : False
-          "ProcessingString": process_string
+          "ProcessingString": processing_string
           }
+
+  for theVar in ['processing_string', 'step1_processstring','step2_processstring', 'step3_processstring']:
+      thePrStr =  cfg.get_param( theVar,'',section)
+      if len( thePrStr ) > 99:
+          raise ValueError('the variable %s ( value: %s) has a size (%d) which exceeds the limit set to 100. ERRROR.' % ( theVar, thePrStr, len( thePrStr ) ) )
+
+  if wmtest:
+      params["ConfigCacheUrl"] = wma.COUCH_DB_ADDRESS
+      params["DbsUrl"] = "https://" + wma.WMAGENT_URL + wma.DBS3_URL
 
   if url_dict != "":
       #print "This is the url",url_dict,"to get the dict from"
@@ -858,7 +848,9 @@ def build_params_dict(section,cfg):
     params.update({"ConfigCacheID": step1_docID,
                    "Scenario": "pp",
                    "IncludeParents" : includeparents,
-                   "TransientOutputModules":transient_output})
+                   "PrepID": request_id,
+                   "TransientOutputModules":transient_output,
+                   "Multicore":multicore})
 
 
     if skim_docid != '':
@@ -873,7 +865,7 @@ def build_params_dict(section,cfg):
 
 
       params.update({"RequestString": identifier,
-                     "FirstEvent": 1, 
+                     "FirstEvent": 1,
                      "FirstLumi": 1,
                      "TimePerEvent": time_event,
                      "FilterEfficiency": filter_eff,
@@ -885,26 +877,27 @@ def build_params_dict(section,cfg):
                      }
                     )
 
-      events_per_lumi = int(100. / float(filter_eff))
-      params.update({
-          "EventsPerLumi" : events_per_lumi,
-          })
+      events_per_lumi = int(float( events_per_lumi ) / float(filter_eff))
+      params.update({"EventsPerLumi" : events_per_lumi,})
+
       if wmtest:
           params.pop("EventsPerLumi")
-          
+
       if params["LheInputFiles"]=='True' or params["LheInputFiles"]==True:
           #max out to 500K for "lhe step zero"
           print "Setting events per job here !!!!",type(params["LheInputFiles"]),params["LheInputFiles"]
           events_per_job=500000
           if wmtest:
               events_per_job=15000
-          
+
       if events_per_job and int(events_per_job):
           params.update({
               "EventsPerJob" : int(events_per_job)
               })
 
-        
+      if pileup_dataset:
+          params.update({"MCPileup": pileup_dataset})
+
       params.pop('BlockBlacklist')
       params.pop('BlockWhitelist')
       params.pop('InputDataset')
@@ -916,13 +909,16 @@ def build_params_dict(section,cfg):
                 "ConfigCacheID": step1_docID,
                 "PrepID": request_id,
                 "TotalTime": 28800 })
+
     if primary_dataset:
         params.update({"PrimaryDataset": primary_dataset})
 
+    if pileup_dataset:
+      params.update({"MCPileup": pileup_dataset})
 
     if int(number_events):
         params.update({"RequestNumEvents": number_events})
-                    
+
   elif request_type == 'LHEStepZero':
       params.update({"RequestString": identifier,
                      "TimePerEvent": time_event,
@@ -938,7 +934,7 @@ def build_params_dict(section,cfg):
                      "TotalTime": 28800 ,
                      "EventsPerLumi":300,
                      "ProdJobSplitAlgo" : "EventBased",
-                     "ProdJobSplitArgs" : {"events_per_job": int(events_per_job),"events_per_lumi": 300}
+                     "ProdJobSplitArgs" : {"events_per_job": int(events_per_job),"events_per_lumi": int(events_per_lumi)}
                     })
 
       params.pop('BlockBlacklist')
@@ -946,7 +942,7 @@ def build_params_dict(section,cfg):
       params.pop('InputDataset')
       params.pop('RunBlacklist')
       params.pop('RunWhitelist')
-      
+
   elif request_type == 'ReDigi':
     if number_events:
         if blocks:
@@ -956,7 +952,6 @@ def build_params_dict(section,cfg):
             print "\n\n\n WARNING automated block selection performed \n\n\n"
             params.update({"RequestNumEvents" : number_events})
 
-        
     params.update({"RequestString": identifier,
                 "StepOneConfigCacheID": step1_docID,
                 "KeepStepOneOutput": keep_step1,
@@ -990,54 +985,80 @@ def build_params_dict(section,cfg):
       params.pop('RunBlacklist')
       params.pop('BlockWhitelist')
       params.pop('BlockBlacklist')
-      
-      task1_dict={'SplittingAlgorithm': 'LumiBased',
-                  'SplittingArguments': {'lumis_per_job': 8},
+      task1_dict={'SplittingAlgo': 'LumiBased',
                   'TaskName':'Task1'
                   }
-      
+
       task1_dict['GlobalTag'] = cfg.get_param('step1_globaltag',globaltag,section)
       task1_dict['ConfigCacheID'] = step1_docID
       task1_dict['KeepOutput'] = keep_step1
+      task1_dict['ProcessingString'] = cfg.get_param('processing_string',processing_string,section)
+      task1_dict['AcquisitionEra'] = cfg.get_param('step1_era',params['CMSSWVersion'],section)
+      task1_dict['LumisPerJob'] = int( cfg.get_param('step1_lumisperjob',5,section) )
       params['Task1']=task1_dict
       params['TaskChain']=1
       if step2_cfg or step2_docID:
-          task2_dict={'SplittingAlgorithm': 'LumiBased',
-                      'SplittingArguments': {'lumis_per_job': 8},
+          task2_dict={'SplittingAlgo': 'LumiBased',
                       'TaskName':'Task2'
                       }
           task2_dict['GlobalTag'] = cfg.get_param('step2_globaltag',globaltag,section)
+          task2_dict['CMSSWVersion'] = cfg.get_param('step2_release',params['CMSSWVersion'],section)
           task2_dict['ConfigCacheID'] = step2_docID
           task2_dict['InputFromOutputModule'] = step2_output
           task2_dict['InputTask'] = cfg.get_param('step2_input','Task1',section)
-          #task2_dict['KeepOutput'] = keep_step2
+          #task2_dict['KeepOutput'] = keep_step2 # THIS NEEDS BE ASSESSED!!!! GF: check with Alan's example of taskchain
+
+          # global processing_string, the value for the entire workflow,
+          # always exists in the scope of build_params_dict (could be set to ''). If step2_processstring not set, step2'll inhering the global value
+          task2_dict['ProcessingString'] = cfg.get_param('step2_processstring',processing_string,section)
+          # if not specified in .conf, AcquisitionEra is set to the CMSSW release of the current task => MUST BE DISCUSSED w/ PdmV for behaviour on MC
+          task2_dict['AcquisitionEra']   = cfg.get_param('step2_era',task2_dict['CMSSWVersion'],section)
+          task2_dict['LumisPerJob']      = int( cfg.get_param('step2_lumisperjob',1,section) )
           params['Task2']=task2_dict
           params['TaskChain']=2
+
           if step3_cfg or step3_docID:
-              task3_dict={'SplittingAlgorithm': 'LumiBased',
-                          'SplittingArguments': {'lumis_per_job': 8},
+              task3_dict={'SplittingAlgo': 'LumiBased',
                           'TaskName':'Task3'
                           }
               task3_dict['GlobalTag'] = cfg.get_param('step3_globaltag',globaltag,section)
+              task3_dict['CMSSWVersion'] = cfg.get_param('step3_release',params['CMSSWVersion'],section)
               task3_dict['ConfigCacheID'] = step3_docID
               task3_dict['InputFromOutputModule'] = step3_output
               task3_dict['InputTask'] = cfg.get_param('step3_input','Task2',section)
-              #task3_dict['KeepOutput'] = keep_step3
+              # global processing_string, the value for the entire workflow, always exists in the scope of build_params_dict (could be set to ''). If step3_processstring not set, step3'll inhering the global value
+              task3_dict['ProcessingString'] = cfg.get_param('step3_processstring',processing_string,section)
+              # if not specified in .conf, AcquisitionEra is set to the CMSSW release of the current task => MUST BE DISCUSSED w/ PdmV for behaviour on MC
+              task3_dict['AcquisitionEra']   = cfg.get_param('step3_era',task3_dict['CMSSWVersion'],section)
+              task3_dict['LumisPerJob']      = int( cfg.get_param('step3_lumisperjob',5,section) )
+              #task3_dict['KeepOutput'] = keep_step3   # ASSESS THIS ONE !!!
               params['Task3']=task3_dict
               params['TaskChain']=3
-              
       #from pprint import pformat
       #print "\n current dictionnary \n",pformat(params),'\n\n'
-      
+
       ###raise Exception('Unknown request type, aborting')
+
+  elif request_type == "DQMHarvest":
+     params.update({
+                     "ConfigCacheUrl": "https://cmsweb.cern.ch/couchdb",
+                     "DQMHarvestUnit": "byRun",
+                     "Scenario": "pp",
+                     "PrepID": request_id,
+                     "TransientOutputModules":transient_output,
+                     "DQMUploadUrl" : "https://cmsweb.cern.ch/dqm/offline",
+                     "DQMConfigCacheID" : harvest_docID})
+     del (params["OpenRunningTimeout"])
+
   else:
       print "Request type chose: "+str(request_type)
       raise Exception('Unknown request type, aborting')
 
-  if harvest_docID:
+  if harvest_docID and request_type!="DQMHarvest":
       ##setup automatic harvesting
-      params.update({"EnableDQMHarvest" : 1,
+      params.update({"EnableHarvesting" : True,
                      "DQMUploadUrl" : "https://cmsweb.cern.ch/dqm/offline",
+                     #"DQMUploadUrl" : "https://cmsweb.cern.ch/dqm/offline",
                      "DQMConfigCacheID" : harvest_docID})
 
 
@@ -1057,7 +1078,7 @@ def build_parser():
   # Example cfg
   example_cfg = "\n[MyDescriptionOfTheRequest]\n"
   example_cfg+= "dset_run_dict = {\"/DoubleElectron/Run2011B-v1/RAW\" : get_runs('/MinimumBias/Run2011B-v1/RAW',maxrun=177718)}\n"
-  example_cfg+= "docID = 8216d7bbd56664bc2a5853fb4f02d0f9\n"  
+  example_cfg+= "docID = 8216d7bbd56664bc2a5853fb4f02d0f9\n"
   example_cfg+= "release = CMSSW_4_2_8_patch3\n"
   example_cfg+= "globaltag = GR_R_42_V20::All\n"
   example_cfg+= "\n[MyDescriptionOfTheRequest2]\n"
@@ -1070,12 +1091,12 @@ def build_parser():
   # Here we define an option parser to handle commandline options..
   usage = 'usage: %prog <options>\n'
   usage+= '\n\nExample cfg:\n'
-  usage+= example_cfg    
-  
+  usage+= example_cfg
+  # https://docs.python.org/2/library/optparse.html
   parser = optparse.OptionParser(usage,option_class=ExtendedOption)
-    
-  parser.add_option('--arch', help='SCRAM_ARCH', dest='scramarch')  
-  parser.add_option('--release', help='Production release', dest='release')
+
+  parser.add_option('--arch', help='SCRAM_ARCH', dest='scramarch')
+  parser.add_option('--release', help='Production CMSSW release', dest='release')
   parser.add_option('--request-type', help='Request type: "MonteCarlo","MonteCarloFromGEN","ReDigi"' , dest='request_type')
   parser.add_option('--conditions', help='Conditions Global Tag' , dest='globaltag')
   parser.add_option('--request-id', help='Request identifier' , dest='request_id')
@@ -1083,15 +1104,25 @@ def build_parser():
   parser.add_option('--blocks', help='comma separated list of input blocks to be processed' , dest='blocks')  
   parser.add_option('--pileup-ds', help='Pile-Up input Data Set name' , dest='pu_dataset')
   parser.add_option('--step1-cfg', help='step 1 configuration' , dest='step1_cfg')
+  parser.add_option('--step1-era',help='AcquisitionEra for step1 in a TaskChain' ,dest='step1_era')
   parser.add_option('--step1-output', help='step 1 output' , dest='step1_output')
   parser.add_option('--keep-step1', help='step1 output keeping flag'  ,action='store_true', dest='keep_step1')
+  parser.add_option('--step1-lumisperjob',help='lumi per job of step 1 in a TaskChain' ,dest='step1_lumisperjob')
   parser.add_option('--step1-docID', help='step 1 configuration' , dest='step1_docID')
   parser.add_option('--cfg_path', help='Alias for step 1 configuration' , dest='cfg_path')
   parser.add_option('--step2-cfg',help='step 2 configuration' ,dest='step2_cfg')
+  parser.add_option('--step2-release',help='step 2 CMSSW release in a TaskChain' ,dest='step2_release')
+  parser.add_option('--step2-processstring',help='processing string for step 2 in a TaskChain - will appear in DS name' ,dest='step2_processstring')
+  parser.add_option('--step2-era',help='AcquisitionEra for step2 in a TaskChain' ,dest='step2_era')
   parser.add_option('--step2-output',help='step 2 output' ,dest='step2_output')
+  parser.add_option('--step2-lumisperjob',help='lumi per job of step 2 in a TaskChain' ,dest='step2_lumisperjob')
   parser.add_option('--keep-step2',help='step2 output keeping flag',  action='store_true',dest='keep_step2')
   parser.add_option('--step2-docID',help='step 2 configuration' ,dest='step2_docID')
   parser.add_option('--step3-cfg',help='step 3 configuration' ,dest='step3_cfg')
+  parser.add_option('--step3-release',help='step 3 CMSSW release in a TaskChain' ,dest='step3_release')
+  parser.add_option('--step3-processstring',help='processing string for step 3 in a TaskChain - will appear in DS name' ,dest='step3_processstring')
+  parser.add_option('--step3-era',help='AcquisitionEra for step3 in a TaskChain' ,dest='step3_era')
+  parser.add_option('--step3-lumisperjob',help='lumi per job of step 3 in a TaskChain' ,dest='step3_lumisperjob')
   parser.add_option('--step3-docID',help='step 3 configuration' ,dest='step3_docID')
   parser.add_option('--priority',help='priority flag' ,dest='priority')
   parser.add_option('--primary-dataset',help='primary dataset name' ,dest='primary_dataset')
@@ -1099,31 +1130,42 @@ def build_parser():
   parser.add_option('--filter-eff',help='filter efficiency' ,dest='filter_eff')
   parser.add_option('--number-events',help='number of events' ,dest='number_events', default=0)
   parser.add_option('--events-per-job', help='number of events per job (for LHE production)' , dest='events_per_job', default=0)
+  parser.add_option('--events-per-lumi',help='number of events per lumisection (for request from scratch)', dest='events_per_lumi', default=100)
   parser.add_option('--version', help='submission version' , dest='version')
   parser.add_option('--cfg_db_file', help='File containing the cfg name docid pairs' , dest='cfg_db_file')
   parser.add_option('--user', help='The registered username' , dest='user')
   parser.add_option('--group', help='The group to which the user belong' , dest='group')
   parser.add_option('--lhe', help='specify that there is .lhe file in input', dest='lhe_input', default=False, action='store_true')
-  
+
   ##New parametters as of 2012-08-22
-  parser.add_option('--memory', help='RSS memory in MB (Default 1500)', dest='size_memory', default=2300)
+  parser.add_option('--memory', help='RSS memory in MB (Default 2300)', dest='size_memory', default=2300)
   parser.add_option('--size-event', help='Expected size per event in KB (Default 2000)', dest='size_event', default=2000)
   parser.add_option('--test', help='To test things', action='store_true' , dest='test')
   parser.add_option('--wmtest', help='To inject requests to the cmsweb test bed', action='store_true' , dest='wmtest')
   parser.add_option('--wmtesturl', help='To inject to a specific testbed', dest='wmtesturl', default='cmsweb-testbed.cern.ch')
   parser.add_option('--includeparents', help='Include parents', action='store_true' , dest='includeparents')
   parser.add_option('--req_name', help='Set the name of the request', dest='req_name')
-  parser.add_option('--process-string', help='process string do be added in the second part of dataset name' , dest='process_string')
+  parser.add_option('--process-string', help='string to be added in the name of the request' , dest='process_string',default='')
+  parser.add_option('--processing-string', help='process string do be added in the second part of dataset name' , dest='processing_string',default='') 
   parser.add_option('--batch', help='Include in the WF batch number' , dest='batch')
-  
+  parser.add_option('--open-running-timeout', help='how long(finite) a request should remain opened, in seconds' , dest='open_running_timeout',default=43200)
+
   # Param to be inline with prep wmcontrol
-  parser.add_option('--campaign', help='The campaign name' , dest='campaign', default = "")
+  parser.add_option('--campaign', help='The name of the era (was: campaign; NO LNOGER)' , dest='campaign', default = "")
   # The config file
   parser.add_option('--req_file', help='The ini configuration to launch requests' , dest='req_file')
   parser.add_option('--url-dict', help='Pickup a dict from a given url', default="", dest='url_dict')
-  
+
+  parser.add_option('--force-lumis', help='Force lumis-based splitting',
+                    action='store_true', dest='force_lumis')
+  parser.add_option('--brute-force', help='Use brute force algorithm',
+                    action='store_true', dest='brute_force')
+  parser.add_option('--margin', help='Specify margin for splitting',
+                    default=0.05, dest='margin')
+  parser.add_option('--lumi-list', help='Specify lumisections',
+                    default='', dest='lumi_list')
   return parser
-  
+
 #-------------------------------------------------------------------------------
 
 banner=\
@@ -1138,6 +1180,7 @@ if __name__ == "__main__":
     print banner
 
     # Build a parser
+    # https://docs.python.org/2/library/optparse.html
     parser = build_parser()
 
     # here we have all parameters, taken from commandline or config
