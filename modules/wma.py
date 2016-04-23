@@ -1,5 +1,3 @@
-#! /usr/bin/env python
-
 '''
 Module containing the functions necessary to interact with the wma.
 Credit and less than optimal code has to be spreaded among lots of people.
@@ -11,71 +9,56 @@ import imp
 import sys
 import pprint
 import time
-import json
 
 try:
-    from PSetTweaks.WMTweak import makeTweak
-    from WMCore.Cache.WMConfigCache import ConfigCache
+  from PSetTweaks.WMTweak import makeTweak
+  from WMCore.Cache.WMConfigCache import ConfigCache
 except:
-    print "Probably no WMClient was set up. Trying to proceed anyway..."
+  print "Probably no WMClient was set up. Trying to proceed anyway..."
+#-------------------------------------------------------------------------------
 
-# DBS_URL = "http://cmsdbsprod.cern.ch/cms_dbs_prod_global/servlet/DBSServlet"
-URL = 'https://cmsweb.cern.ch'
-DBS_URL = URL + '/dbs/prod/global/DBSReader'
-PHEDEX_ADDR = URL + '/phedex/datasvc/json/prod/blockreplicas?dataset=%s*'
+
+#DBS_URL = "http://cmsdbsprod.cern.ch/cms_dbs_prod_global/servlet/DBSServlet"
+DBS_URL = "https://cmsweb.cern.ch/dbs/prod/global/DBSReader"
+PHEDEX_ADDR = 'https://cmsweb.cern.ch/phedex/datasvc/json/prod/blockreplicas?dataset=%s*'
+
 DATABASE_NAME = 'reqmgr_config_cache'
 COUCH_DB_ADDRESS = 'https://cmsweb.cern.ch/couchdb'
 WMAGENT_URL = 'cmsweb.cern.ch'
 DBS3_URL = "/dbs/prod/global/DBSReader/"
 
-
 def testbed(to_url):
-    global COUCH_DB_ADDRESS
-    global WMAGENT_URL
-    global DBS3_URL
-    WMAGENT_URL = to_url
-    # WMAGENT_URL = 'cmsweb-testbed.cern.ch'
-    # WMAGENT_URL = 'sryu-dev01.cern.ch'
-    COUCH_DB_ADDRESS = 'https://%s/couchdb' % (WMAGENT_URL)
-    DBS3_URL = '/dbs/int/global/DBSReader/'
+  global COUCH_DB_ADDRESS
+  global WMAGENT_URL
+  global DBS3_URL
+  WMAGENT_URL = to_url
+  #WMAGENT_URL = 'cmsweb-testbed.cern.ch'
+  #WMAGENT_URL = 'sryu-dev01.cern.ch'
+  COUCH_DB_ADDRESS = 'https://%s/couchdb'%( WMAGENT_URL )
+  DBS3_URL = "/dbs/int/global/DBSReader/"
 
+#-------------------------------------------------------------------------------
 
-def init_connection(url):
-    return httplib.HTTPSConnection(url, port=443,
-                                   cert_file=os.getenv('X509_USER_PROXY'),
-                                   key_file=os.getenv('X509_USER_PROXY'))
-
-
-def httpget(conn, query):
-    conn.request("GET", query.replace('#', '%23'))
-    try:
-        response = conn.getresponse()
-    except httplib.BadStatusLine:
-        raise RuntimeError('Something is really wrong')
+def generic_get(base_url, query):
+    headers  =  {"Content-type": "application/json"}
+    conn  =  httplib.HTTPSConnection(base_url, cert_file = os.getenv('X509_USER_PROXY'), key_file = os.getenv('X509_USER_PROXY'))
+    conn.request("GET", query.replace("#", "%23"))
+    #print "getting",base_url,query,"..."
+    response = conn.getresponse()
+    
     if response.status != 200:
-        print "Problems quering DBS3 RESTAPI with %s: %s" % (
-            base_url + query.replace('#', '%23'), response.read())
-        return None
-    return response.read()
+        print "Problems quering DBS3 RESTAPI: %s" %(base_url+query.replace("#", "%23"))
+        data = None
+    else:
+        data = response.read()
+        #print "...got",data
+    return data
 
-
-def httppost(conn, where, params):
-    headers = {"Content-type": "application/json", "Accept": "text/plain"}
-    conn.request("POST", where, json.dumps(params), headers)
-    try:
-        response = conn.getresponse()
-    except httplib.BadStatusLine:
-        raise RuntimeError('Something is really wrong')
-    if response.status != 200:
-        print "Problems quering DBS3 RESTAPI with %s: %s" % (
-            params, response.read())
-        return None
-    return response.read()
-
+#-------------------------------------------------------------------------------
 
 def __check_GT(gt):
     if not gt.endswith("::All"):
-        print "It seemslike the name of the GT '%s' has a typo in it, missing the final ::All which will crash your job. If insted you're using CondDBv2, you're fine." %gt
+        raise Exception,"It seemslike the name of the GT '%s' has a typo in it!" %gt
 
 def __check_input_dataset(dataset):
     if dataset and dataset.count('/')!=3:
@@ -164,8 +147,8 @@ def makeRequest(url,params,encodeDict=False):
     data = response.read()
     if response.status != 303:
         print 'could not post request with following parameters:'
-        pprint.pprint( params )
-        print
+        #pprint.pprint( params )
+        #print
         for item in params.keys():
             print item + ": " + str(params[item])
         print 'Response from http call:'
