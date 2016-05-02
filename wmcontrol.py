@@ -7,6 +7,9 @@
 # The name is clearly inspired to GridControl.                                 #
 #                                                                              #
 # Danilo Piparo, CERN                                                          #
+#
+# This is a test
+#
 #                                                                              #
 ################################################################################
 
