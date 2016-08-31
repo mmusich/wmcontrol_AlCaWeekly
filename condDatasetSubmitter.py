@@ -21,7 +21,7 @@ def createOptionParser():
   global DRYRUN
   usage=\
   """
-  ConditionValidation.py --gt <GT> --run <run> --conds <condition json>
+  ConditionValidation.py --gt <GT> [ either: --run <run> or: --runLs <runLumiDict>] --conds <condition json>
   """
 
   parser = OptionParser(usage)
@@ -37,6 +37,8 @@ def createOptionParser():
                     help="common global tag to base RECO+HLT/HLT+RECO submissions")
   parser.add_option("--run",
                     help="the run number to be processed, can be a comma separated list")
+  parser.add_option("--runLs",
+                    help="the dictionary of run numbers mapped to lists of lumi sections (standard CMS certification json format)")
   parser.add_option("--ds",
                     help="dataset to be processed",
                     default="/MinimumBias/Run2012B-PromptReco-v1/RECO")
@@ -76,11 +78,21 @@ def createOptionParser():
                     action='store_true')
                      
   (options,args) = parser.parse_args()
-
+#  print "** options args"
+#  print options
+#  print args
+#  print "** options args"
+  
 #  if not options.gt or not options.run or not options.conds:
 #      parser.error("options --run, --gt and --conds are mandatory")
-  if not options.newgt or not options.gt or not options.run:
-      parser.error("options --newgt, --run, and --gt  are mandatory")
+  if not options.newgt or not options.gt or not ( options.run or options.runLs):
+      parser.error("options --newgt,  [ either: --run  or: --runLs ], and --gt  are mandatory")
+  
+  print "** runLs"
+  print options.runLs
+  print "** runLs"
+  if (options.runLs):
+    options.runLs = eval(options.runLs)
 
   CMSSW_VERSION='CMSSW_VERSION'
   if not os.environ.has_key(CMSSW_VERSION):
@@ -102,7 +114,11 @@ def createOptionParser():
     DRYRUN=True
 
   options.ds=options.ds.split(',')
-  options.run = options.run.split(',')
+  if (options.run): options.run = options.run.split(',')
+  # FIX FIX: can I act here to save the day and handle propetly the dictionary case ?
+  print "OPOP options.run"
+  print options.run
+  print "OPOP options.run"
   return options
 
 #-------------------------------------------------------------------------------
@@ -150,7 +166,10 @@ def isAtSite(ds, run):
   connection = wma.init_connection('cmsweb.cern.ch')
   blockDicts = ast.literal_eval(
     wma.httpget(connection, wma.DBS3_URL+"blocks?dataset=%s&run_num=%s"%(ds,run)) ) # connection return a string which represents a list
-
+  print "INI inside isAtSite"
+  print run
+  print blockDicts
+  print "END inside isAtSite"
 
   for blockDict in blockDicts:
       block = blockDict['block_name']
@@ -221,7 +240,7 @@ def getDriverDetails(Type,B0T,HIon,recoRelease):
             "procname":"HLT2",
             "datatier":"FEVTDEBUGHLT,DQM ",
             "eventcontent":"FEVTDEBUGHLT,DQM",
-            "inputcommands":'keep *,drop *_hlt*_*_HLT,drop *_TriggerResults_*_HLT,drop *_*_*_RECO',
+            "inputcommands":'keep *,drop *_hlt*_*_HLT,drop *_TriggerResults_*_HLT,,drop *_*_*_RECO',
             "era":'Run2_2016',
             #"custcommands":'process.schedule.remove( process.HLTriggerFirstPath )',
             "custcommands":"process.load('Configuration.StandardSequences.Reconstruction_cff'); " +\
@@ -242,7 +261,7 @@ def getDriverDetails(Type,B0T,HIon,recoRelease):
                }
 
   if options.HLT:
-    HLTBase.update({"steps":"L1REPACK:Full,HLT:%s,DQM"%(options.HLT),
+    HLTBase.update({"steps":"HLT:%s,DQM"%(options.HLT),
                     "dumppython":True}) 
   if Type=='HLT':
     return HLTBase
@@ -345,10 +364,15 @@ def execme(command):
 def createHLTConfig(options):
 
   assert  os.path.exists("%s/src/HLTrigger/Configuration/"%(options.hltCmsswDir) ), "error: HLTrigger/Configuration/ is missing in the CMSSW release for HLT (set to: echo $CMSSW_VERSION ) - can't create the HLT configuration "
+  
+  onerun=0
+  if      (options.run):    onerun = options.run[0]
+  elif    (options.runLs):  onerun = options.runLs.keys()[0]
+#  elif    (options.runLs):  onerun = eval(options.runLs).keys()[0]
 
   if options.HLT=="SameAsRun":
     hlt_command="hltGetConfiguration --unprescale --cff --offline " +\
-                "run:%s "%options.run[0] +\
+                "run:%s "%onerun +\
                 "> %s/src/HLTrigger/Configuration/python/HLT_%s_cff.py"%(options.hltCmsswDir,options.HLT)
                 
   elif options.HLT=="Custom":
@@ -373,7 +397,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
 
   # get processing string
   if options.string is None:
-     processing_string = str(datetime.date.today()).replace("-","_") + "_" + str(datetime.datetime.now().time()).replace(":","_")[0:5]
+    processing_string = str(datetime.date.today()).replace("-","_") + "_" + str(datetime.datetime.now().time()).replace(":","_")[0:5] 
     #processing_string = str(datetime.date.today()).replace("-","_") # GF: check differentiation between steps VS step{2}_processstring
   else:
     processing_string = options.string # GF: check differentiation between steps VS step{2}_processstring
@@ -405,7 +429,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
        driver_command += "--output '%s' " %details['output']  
     if details['dumppython']:
        driver_command += "--dump_python "
-    if 'customise' in details.keys() and details['customise']!='':
+    if 'customise' in details.keys() and details['customise']!='': 
       driver_command += '--customise %s '%details['customise']
     if details['era']!="" :
       driver_command += "--era %s " % details['era']
@@ -422,7 +446,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
     cmssw_command = "cd %s; eval `scramv1 runtime -sh`; cd -"%options.hltCmsswDir
     upload_command = "wmupload.py -u %s -g PPD -l %s %s"% (os.getenv('USER'),cfgname,cfgname)
     execme(cmssw_command + '; ' + driver_command + '; ' + upload_command)
-
+    
     base=None
     if 'base' in details:
       base=details['base']
@@ -437,8 +461,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                       "--no_exec " +\
                       "-n 100 "
       execme(driver_command)
-
-    label=cfgname.lower().replace('.py','')[0:5]
+      
     recodqm = None
     if 'recodqm' in details:
       recodqm=details['recodqm']
@@ -455,7 +478,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                       "--no_exec " +\
                       "-n 100 "                 
 
-      if 'customise' in recodqm.keys() and recodqm['customise']!="" :
+      if 'customise' in recodqm.keys() and recodqm['customise']!="" : 
         driver_command += "--customise %s " % recodqm['customise']
       if recodqm['era']!="" :
         driver_command += "--era %s " % recodqm['era']
@@ -483,17 +506,17 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                       "--filetype DQM " +\
                       "--conditions %s "%options.basegt +\
                       "--filein=file:%s "%filein +\
-                      "--python_filename=step4_%s_HARVESTING.py "%label +\
+                      "--python_filename=step4_%s_HARVESTING.py "%label +\ 
                       "--no_exec " +\
                       "-n 100 "
                       
       if options.recoCmsswDir:
         cmssw_command = "cd %s; eval `scramv1 runtime -sh`; cd -"%options.recoCmsswDir
-        upload_command = "wmupload.py -u %s -g PPD -l %s %s"% (os.getenv('USER'),'step4_%s_HARVESTING.py'%label,'step4_%s_HARVESTING.py'%label)
+        upload_command = "wmupload.py -u %s -g PPD -l %s %s"% (os.getenv('USER'),'step4_%s_HARVESTING.py'%label,'step4_%s_HARVESTING.py'%label) 
         execme(cmssw_command + '; ' + driver_command + '; ' + upload_command)
       else:
         execme(driver_command)
-    else:
+    else:      
       if options.Type.find("ALCA")!=-1:
           filein = "%s_RAW2DIGI_L1Reco_RECO_ALCA_DQM_inDQM.root"%details['reqtype']
       else:
@@ -569,15 +592,23 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                   'globaltag =%s \n' %gtshort
   wmcconf_text+='dset_run_dict= {'
   for ds in options.ds:
-    wmcconf_text+='"%s" : [%s],\n '%(ds, ','.join(options.run+ map(lambda s :'"%s"'%(s),allRunsAndBlocks[ds])))
-  wmcconf_text+='}\n'
-  wmcconf_text+='enableharvesting = True\n'
+    # if options.run is not specified and runLs is, simply leave the list of runs blank
+    if (options.run): wmcconf_text+='"%s" : [%s],\n '%(ds, ','.join(options.run+ map(lambda s :'"%s"'%(s),allRunsAndBlocks[ds])))
+    else            : wmcconf_text+='"%s" : [],\n '%(ds)
+    wmcconf_text+='}\n'
+  print "\nwmconf_text IN THE MAKING"
+  print  wmcconf_text
+  print "wmconf_text IN THE MAKING\n"
   wmcconf_text+='dqmuploadurl = https://cmsweb.cern.ch/dqm/relval\n\n'
+
+  onerun=0
+  if      (options.run):    onerun = options.run[0]
+  elif    (options.runLs):  onerun = options.runLs.keys()[0]
 
   if base:
     wmcconf_text+='[HLT_validation]\n'+\
                    'cfg_path = reco.py\n' +\
-                   'req_name = %s_RelVal_%s\n'%(details['reqtype'],options.run[0]) +\
+                   'req_name = %s_RelVal_%s\n'%(details['reqtype'],onerun) +\
                    '\n\n'
   elif recodqm:
     pass
@@ -589,9 +620,11 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                    'step1_lumisperjob = 1\n' +\
                    'processing_string = %s_%sref_%s \n'%(processing_string,details['reqtype'],refgtshort) +\
                    'cfg_path = REFERENCE.py\n' +\
-                   'req_name = %s_reference_RelVal_%s\n'%(details['reqtype'],options.run[0]) +\
+                   'req_name = %s_reference_RelVal_%s\n'%(details['reqtype'],onerun) +\
                    'globaltag = %s\n'%(refgtshort) +\
-                   'harvest_cfg=step4_refer_HARVESTING.py\n\n' # this is ugly and depends on [0:5]; can't be easliy fixed w/o reorganization
+                   'harvest_cfg=step4_refer_HARVESTING.py\n\n' # this is ugly and depends on [0:5]; can't be easliy fixed w/o reorganization 
+    if (options.runLs):
+      wmcconf_text+='lumi_list=%s\n\n'%(options.runLs)
 
   task=2
   print confCondList
@@ -614,7 +647,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                        'step1_lumisperjob = 10\n' +\
                        'processing_string = %s_%s_%s \n'%(processing_string,details['reqtype']+label,refsubgtshort) +\
                        'cfg_path = %s\n'%cfgname +\
-                       'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,options.run[0]) +\
+                       'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,onerun) +\
                        'globaltag = %s\n'%(refsubgtshort) +\
                        'step%d_output = FEVTDEBUGHLToutput\n'%task +\
                        'step%d_cfg = recodqm.py\n'%task +\
@@ -625,7 +658,9 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                        'step%d_timeevent = 10\n'%task
         if options.recoRelease:
           wmcconf_text+='step%d_release = %s \n'%(task,options.recoRelease)
-        wmcconf_text+='harvest_cfg=step4_%s_HARVESTING.py\n\n'%label
+        wmcconf_text+='harvest_cfg=step4_%s_HARVESTING.py\n\n'%label 
+        if (options.runLs):
+          wmcconf_text+='lumi_list=%s\n\n'%(options.runLs)
       else:
         continue
 
@@ -646,7 +681,7 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                      'step1_lumisperjob = 10\n' +\
                      'processing_string = %s_%s_%s \n'%(processing_string,details['reqtype']+label,subgtshort) +\
                      'cfg_path = %s\n'%cfgname +\
-                     'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,options.run[0]) +\
+                     'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,onerun) +\
                      'globaltag = %s\n'%(subgtshort) +\
                      'step%d_output = FEVTDEBUGHLToutput\n'%task +\
                      'step%d_cfg = recodqm.py\n'%task +\
@@ -657,7 +692,10 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                      'step%d_timeevent = 10\n'%task
       if options.recoRelease:
         wmcconf_text+='step%d_release = %s \n'%(task,options.recoRelease)
-      wmcconf_text+='harvest_cfg=step4_%s_HARVESTING.py\n\n'%label
+      wmcconf_text+='harvest_cfg=step4_%s_HARVESTING.py\n\n'%label 
+      if (options.runLs):
+        wmcconf_text+='lumi_list=%s\n\n'%(options.runLs)
+
     else:
       label=cfgname.lower().replace('.py','')[0:5]
       wmcconf_text+='\n\n[%s_%s]\n' %(details['reqtype'],label) +\
@@ -665,17 +703,73 @@ def createCMSSWConfigs(options,confCondDictionary,allRunsAndBlocks):
                      'time_event = 10\n' +\
                      'size_memory = 3000\n' +\
                      'step1_lumisperjob = 1\n' +\
-                     'processing_string = %s_%s_%s \n'%(processing_string,details['reqtype']+label,gtshort) +\
+                     'processing_string = %s_%s_%s \n'%(str(datetime.date.today()).replace("-","_"),details['reqtype']+label,gtshort) +\
                      'cfg_path = %s\n'%cfgname +\
-                     'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,options.run[0]) +\
+                     'req_name = %s_%s_RelVal_%s\n'%(details['reqtype'],label,onerun) +\
                      'globaltag = %s\n'%(gtshort) +\
-                     'harvest_cfg=step4_%s_HARVESTING.py\n\n'%label
-                     
+                     'harvest_cfg=step4_%s_HARVESTING.py\n'%label
+      if (options.runLs):
+        wmcconf_text+='lumi_list=%s\n\n'%(options.runLs)
+                
+# FIX FIX FIX      
+# FOLLOW NAMING CONVENTION OF FILE FROM relval_submit.py
+#  run_label_for_FN = '' options.run[0]
+      
+#  run_label_for_FN = ''
+#  if isinstance(options.run, dict) or isinstance(options.run, list):
+#    for oneRun in options.run:
+#      if run_label_for_FN != '':
+#        run_label_for_FN += '_'
+#        run_label_for_FN += str(oneRun)
+#      if isinstance(options.run, dict):
+#            run_label_for_FN +='_ls'
+#      if isinstance(options.run, int):
+#            run_label_for_FN = int(options.run)
+#      if isinstance(options.run, str):
+#            run_label_for_FN = options.run
 
+  run_label_for_fn = ''
+  # if run is int => single label; if run||runLs are list or dict, _-separated composite label
+  
+  if  options.run:
+    print "run is "
+    print options.run
+    print "run is "
+  if options.run and isinstance( options.run, int):
+    run_label_for_fn = options.run
+  elif options.run and isinstance( options.run, list) :
+    #thisRunKey = 'run'
+    #if 'runLs' in options:
+    #  thisRunKey = 'runLs'
+    for oneRun in options.run:
+      if run_label_for_fn != '':
+        run_label_for_fn += '_'
+      run_label_for_fn += str(oneRun)
+  elif options.runLs and isinstance( options.runLs, dict) :
+    for oneRun in options.runLs:
+      if run_label_for_fn != '':
+        run_label_for_fn += '_'
+      run_label_for_fn += str(oneRun)
+
+#  if 'run' in metadata['options'] and isinstance( metadata['options']['run'], int):
+#    run_label_for_fn = metadata['options']['run']
+#  else:
+#    thisRunKey = 'run'
+#    if 'runLs' in metadata['options']:
+#      thisRunKey = 'runLs'
+#      for oneRun in metadata['options'][thisRunKey]:
+#        if run_label_for_fn != '':
+#          run_label_for_fn += '_'
+#        run_label_for_fn += str(oneRun)
   wmconf_name='%sConditionValidation_%s_%s_%s.conf'%(details['reqtype'],
                                                       options.release,
                                                       gtshort,
-                                                      options.run[0])
+                                                      run_label_for_fn) # FOLLOW NAMING CONVENTION OF FILE FROM relval_submit.py
+  print "*** run_label_for_fn "
+  print wmconf_name
+  print "*** run_label_for_FN "
+  # FIX FIX FIX 
+
   if not DRYRUN:
     wmcconf=open(wmconf_name,'w')    
     wmcconf.write(wmcconf_text)
@@ -717,7 +811,8 @@ def printInfo(options):
   print ""
   print "type: %s"%options.Type
   print "dataset: %s"%",".join(options.ds)
-  print "run: %s"%",".join(options.run)
+  if (options.run):     print "run: %s"%",".join(options.run)
+  elif (options.runLs): print "run: %s"%(options.runLs)
   if "HLT" in options.Type:
     print "HLT menu: %s"%menu
     print "Target HLT GT: %s"%newgtshort
@@ -744,18 +839,36 @@ if __name__ == "__main__":
   # Get the options
   options = createOptionParser()
   # Check for PCL availability
-  for run in options.run:
+  # the following loop doesn't do anything meaningful, only a confusing and inaccurate comment
+  #for run in options.run:
     #if not isPCLReady(run):
     #  print "The PCL is not ready for run:",run,"... ignoring for now"
-    print "The PCL is not ready for run:",run,"... ignoring for now"
+    #  print "The PCL is not ready for run:",run,"... ignoring for now"
+
+  print options.run
+  print type(options.run)
+  # this type is LIST in the normal CASE, and it's also list with a single element == dictionary in the LS-filtering case. This is a problem
 
   # Check if it is at FNAL
   allRunsAndBlocks={}
   if not options.noSiteCheck:
     for ds in options.ds:
       allRunsAndBlocks[ds]=[]
+      # FIX FIX: is below what I want ? 
+      if isinstance(options.run, dict): # if run is ls-filtering, run numbers will be in lumi_list and must not be there
+        print "**"
+        continue
+        print "** skipping run numbers"
+      ## TEST TEST
+      if not options.run:               # if run is not specified in the input file, leave allRunsAndBlocks empty 
+        continue
       for run in options.run:
-        newblocks=isAtSite( ds, run)
+        print "inside loop PB IS HERE"
+        print run
+        print "inside loop PB IS HERE"
+        newblocks=isAtSite( ds, int(run))
+        print newblocks
+        print "T or F?"
         if newblocks==False:
           print "Cannot proceed with %s in %s (no suitable blocks found)"%(ds,run)
           sys.exit(1)

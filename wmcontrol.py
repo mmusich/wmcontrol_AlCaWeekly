@@ -313,12 +313,21 @@ def get_dataset_runs_dict(section,cfg):
       run_list = []
       try:
         dataset_runs_dict = eval(cfg.get_param('dset_run_dict','',section))
-        for key in dataset_runs_dict.keys():
+        print "*** get_dataset_runs_dict a"
+        print dataset_runs_dict
+        print "*** get_dataset_runs_dict a"
+        for key in dataset_runs_dict.keys(): # loop over PD's
+            print "*** get_dataset_runs_dict b"
+            print dataset_runs_dict[key]
+            print type(dataset_runs_dict[key])
+            print "*** get_dataset_runs_dict b"
             if isinstance(dataset_runs_dict[key], str):
                 if os.path.exists(dataset_runs_dict[key]):
                     try:
                         json_file = open(dataset_runs_dict[key])
+                        print "json_file: %s"%json_file
                         json_info = json.load(json_file)
+                        print "json_info: %s"%json_info
                         json_file.close()
                     except ValueError:
                         print "Error in JSON file: ", dataset_runs_dict[key], " Exiting..."
@@ -329,6 +338,7 @@ def get_dataset_runs_dict(section,cfg):
                         run_list.append(int(run_number))
                     run_list.sort()
                     dataset_runs_dict[key] = run_list
+                    print "dataset_runs_dict[key]: %s"%dataset_runs_dict[key]
                     run_list = []
                 else:
                     print "JSON file doesn't exists. ", os.path.join(os.getcwd(), dataset_runs_dict[key]), " Exiting..." 
@@ -416,6 +426,13 @@ def loop_and_submit(cfg):
     # build the dictionary for the request
     params,service_params = build_params_dict(section,cfg)
     dataset_runs_dict = get_dataset_runs_dict (section,cfg)
+    print "*** loop_and_submit a"
+    print params
+    print 
+    print service_params
+    print 
+    print dataset_runs_dict
+    print "*** loop_and_submit a"
     if not dataset_runs_dict:
         sys.stderr.write("[wmcontrol exception] No dataset_runs_dict provided")
         sys.exit(-1)
@@ -425,12 +442,15 @@ def loop_and_submit(cfg):
       params['InputDataset']=dataset
       runs=[]
       new_blocks=[]
+      print "type is: %s"%type( dataset_runs_dict[dataset] )
       for item in dataset_runs_dict[dataset]:
+          print "item: %s"%item
           if isinstance(item,str) and '#' in item:
               if item.startswith('#'):
                 new_blocks.append(dataset+item)
               else:
                 new_blocks.append(item)
+          # elif isinstance(item,str)
           else:
             runs.append(item)
       params['RunWhitelist']=runs
@@ -444,7 +464,23 @@ def loop_and_submit(cfg):
               params['BlockWhitelist']=new_blocks
 
       elif service_params['lumi_list'] != '':
-          params['LumiList'] = service_params['lumi_list']
+          lumi_list_dict = eval(service_params['lumi_list'])
+          print "in IF"
+          print service_params['lumi_list']
+          print lumi_list_dict
+          if ( len(lumi_list_dict.keys()) > 0 ):
+              params['LumiList'] = eval(service_params['lumi_list'])
+              print type( service_params['lumi_list'] )
+              print service_params['lumi_list']
+              print type ( params['LumiList']  )
+              print params['LumiList']
+              print params['RunWhitelist']
+              print "ciao ciao "
+              if params.has_key("RunWhitelist") and params['RunWhitelist']!=[] :
+                  print "WARNING: both lumi_list (to set LumiList) and dset_run_dict (to set RunWhitelist) are present"
+                  print "Keeping only the lumi_list option (%s) instead of dset_run_dict (%s)" % ( params['LumiList'], params['RunWhitelist'] )
+                  params.pop('RunWhitelist')
+          #params['LumiList'] = {'256677': [[1, 291], [293, 390], [392, 397], [400, 455], [457, 482]]}
 
       params['RequestString']= make_request_string(params,service_params,section)
 
@@ -474,7 +510,13 @@ def loop_and_submit(cfg):
                   split, details = espl.run(int(__events),
                                             service_params['brute_force'],
                                             service_params['force_lumis'])
-
+                  print "***"
+                  print split
+                  print details
+                  print __events
+                  print service_params['brute_force']
+                  print service_params['force_lumis']
+                  print "***"
                   if split == 'blocks':
                       params['Task1']['BlockWhitelist'] = details
                   elif split == 'lumis':
@@ -484,13 +526,27 @@ def loop_and_submit(cfg):
                   if test_mode:
                       print "Finished in", int((time.time()-t)*1000), "\bms"
 
-          if params['RunWhitelist']:
+          if params.has_key("RunWhitelist") and params['RunWhitelist']:
               params['Task1']['RunWhitelist'] = params['RunWhitelist']
-
+              print "added RunWhitelist to task1"
+              print params['Task1']['RunWhitelist']
+              print "added RunWhitelist to task1"
           if 'RunWhitelist' in params: #if params has key we remove it
               params.pop('RunWhitelist') #because it was set as Task parameter
+              print "REM REM 1"
           if 'InputDataset' in params:
               params.pop('InputDataset')
+              print "REM REM 2"
+
+          if params.has_key("LumiList") and params['LumiList']:
+              params['Task1']['LumiList'] = params['LumiList']
+              print "added lumi_list to task1 x"
+              print params['Task1']['LumiList']
+              print "added lumi_list to task1 y"
+              params.pop('LumiList') #if params has LumiList we remove it because it was set as Task1 parameter
+          #if 'RunWhitelist' in params: #if params has key we remove it
+          #    params.pop('RunWhitelist') #because it was set as Task parameter
+
       elif ('RequestNumEvents' in params and 'LumiList' not in params and
             ('RunWhitelist' not in params or params['RunWhitelist']==[])):
 
@@ -512,7 +568,9 @@ def loop_and_submit(cfg):
               if split == 'blocks':
                   params['BlockWhitelist'] = details
               elif split == 'lumis':
-                  params['LumiList'] = details
+                  print "888888"
+                  params['LumiList'] = details # incomplete ?
+                  print "99999 does this do anything ?"
               elif split == 'dataset':
                   print "no white listing"
 
@@ -724,6 +782,7 @@ def build_params_dict(section,cfg):
   brute_force = cfg.get_param('brute_force', False, section)
   margin = cfg.get_param('margin', 0.05, section)
   lumi_list = cfg.get_param('lumi_list', '', section)
+  print "***** WW lumi_list is: %s"%lumi_list
 
   # Upload to couch if needed or check in the cfg dict if there
   docIDs=[step1_docID,step2_docID,step3_docID]
@@ -813,8 +872,7 @@ def build_params_dict(section,cfg):
           "OpenRunningTimeout" : open_running_timeout,
           #"ConfigCacheUrl": wma.COUCH_DB_ADDRESS,
           #"EnableHarvesting" : False
-          "ProcessingString": processing_string,
-          "Multicore": multicore
+          "ProcessingString": processing_string
           }
 
   for theVar in ['processing_string', 'step1_processstring','step2_processstring', 'step3_processstring']:
@@ -890,6 +948,11 @@ def build_params_dict(section,cfg):
           events_per_job=500000
           if wmtest:
               events_per_job=15000
+
+      if events_per_job and int(events_per_job):
+          params.update({
+              "EventsPerJob" : int(events_per_job)
+              })
 
       if pileup_dataset:
           params.update({"MCPileup": pileup_dataset})
@@ -1138,7 +1201,7 @@ def build_parser():
   parser.add_option('--wmtest', help='To inject requests to the cmsweb test bed', action='store_true' , dest='wmtest')
   parser.add_option('--wmtesturl', help='To inject to a specific testbed', dest='wmtesturl', default='cmsweb-testbed.cern.ch')
   parser.add_option('--dqmuploadurl', help='ulr of the DQM GUI instance where DQM will be uploaded', dest='dqmuploadurl', default='https://cmsweb.cern.ch/dqm/offline')
-  parser.add_option('--enableharvesting', help='activate (1) or not (0) the automatic DQM harvesting', dest='enableharvesting', default='0')
+  parser.add_option('--enableharvesting', help='activate (1) or not (0) the automatic DQM harvesting', dest='enableharvesting', default='0') 
   parser.add_option('--includeparents', help='Include parents', action='store_true' , dest='includeparents')
   parser.add_option('--req_name', help='Set the name of the request', dest='req_name')
   parser.add_option('--process-string', help='string to be added in the name of the request' , dest='process_string',default='')

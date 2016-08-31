@@ -140,13 +140,31 @@ I will ask you some questions to fill the metadata file. For some of the questio
 
                 ds = getInput('/HLTPhysics/Run2015C-v1/RAW', '\nWhat is the dataset to be used?\ne.g. /HLTPhysics/Run2015C-v1/RAW\nds [/HLTPhysics/Run2015C-v1/RAW]: ')
                 
-                while True:
-                    run  = getInput('254906', '\nWhich run number?\ne.g. 254906\nhlt_menu [254906]: ')
-                    try:
-                        run = int(run)
-                        break
-                    except ValueError:
-                        logging.error('The run value has to be an integer or empty (null).')
+                run_err_mess = 'The run value has to be an integer, a dictionary or empty (null).'
+                runORrunLs  = getInput('254906', '\nWhich run number or run number+luminosity sections?\ne.g. 254906 or\n     [254906,254905] or\n     {\'256677\': [[1, 291], [293, 390]]}\nrunORrunLs [254906]: ')
+                run   = ''
+                runLs = ''
+                # do some type recognition and set run or runLs accordingly
+                try:
+                    if   isinstance(runORrunLs, str) and "{"  in runORrunLs :
+                        runLs = eval(runORrunLs)                              # turn a string into a dict and check it's valid
+                        print "uu 1"
+                    elif isinstance(runORrunLs, dict):
+                        runLs = runORrunLs                                    # keep dict
+                        print "uu 2"
+                    elif isinstance(runORrunLs, str) and "["  in runORrunLs :
+                        run   = eval(runORrunLs)                              # turn a string into a list and check it's valid
+                        print "uu 3"
+                    elif isinstance(runORrunLs, str) :
+                        run = int(runORrunLs)                                 # turn string into int 
+                        print "uu 4"
+                    elif isinstance(runORrunLs, list):
+                        run = runORrunLs                                      # keep list
+                        print "uu 5"
+                    else:
+                        raise ValueError(run_err_mess)
+                except ValueError:
+                    logging.error(run_err_mess)
 
                 b0T  = getInput('n', '\nIs this for B=0T?\nAnswer [n]: ')
                 
@@ -162,7 +180,17 @@ I will ask you some questions to fill the metadata file. For some of the questio
                         'run': run
                     }
                 }
-                    
+                print "** metadata before"
+                print metadata
+                print "** metadata before"
+                if runLs:
+                    metadata['options']['runLs'] = runLs
+                    metadata['options'].pop('run')
+                print "** metadata after"
+                print metadata
+                print "** metadata after"
+
+
                 if b0T.lower() == 'y':
                     metadata['options'].update({'B0T':''})
                 if hion.lower() == 'y':
@@ -197,25 +225,19 @@ I will ask you some questions to fill the metadata file. For some of the questio
         commands = []
         try:
             if metadata['HLT_release']:            
-                #commands.append('eval \'scramv1 project %s\'' % metadata['HLT_release'] )
                 commands.append('scramv1 project %s' %metadata['HLT_release'])
                 commands.append('cd %s/src' % metadata['HLT_release'] )
-                #commands.append('eval \'scramv1 runtime -sh\'')
                 commands.append('cmsenv')
                 commands.append('git cms-addpkg HLTrigger/Configuration')
-                #commands.append('eval \'scramv1 b\'')
                 commands.append('scramv1 b')
                 commands.append('voms-proxy-init --voms cms')
                 commands.append('source /afs/cern.ch/cms/PPD/PdmV/tools/subSetup_slc6.sh')
                 commands.append('cd -')                
                 if metadata['PR_release'] != metadata['HLT_release']:
-                    #commands.append('eval \'scramv1 project %s\'' % metadata['PR_release'])
                     commands.append('scramv1 project %s' % metadata['PR_release'])
         except KeyError:            
-            #commands.append('eval \'scramv1 project %s\'' % metadata['PR_release'] )
             commands.append('scramv1 project %s' % metadata['PR_release'])
             commands.append('cd %s/src' % metadata['PR_release'] )
-            #commands.append('eval \'scramv1 runtime -sh\'')
             commands.append('cmsenv')
             commands.append('voms-proxy-init --voms cms')
             commands.append('source /afs/cern.ch/cms/PPD/PdmV/tools/subSetup_slc6.sh')
@@ -223,16 +245,57 @@ I will ask you some questions to fill the metadata file. For some of the questio
 
         cond_submit_command = './condDatasetSubmitter.py '
         for key, val in metadata['options'].iteritems():
-            cond_submit_command += '--%s %s ' % ( key, val )
-        
+            if isinstance(val, list):
+                cond_submit_command += '--%s "' % ( key)
+                for u in val:
+                    cond_submit_command += '%s,'%u
+                cond_submit_command = cond_submit_command[:-1]
+                cond_submit_command += '" '
+            elif isinstance(val, dict):
+                cond_submit_command += '--%s "%s" ' % ( key, val)
+            else:
+                cond_submit_command += '--%s %s ' % ( key, val )
+            # FIX FIX add unverted commans if it's a dictionary ?
+            #
+            #
+            #
+            #
         commands.append('git clone git@github.com:cms-PdmV/wmcontrol.git')
         commands.append('cd wmcontrol')
         commands.append(cond_submit_command)
+
+#        if isinstance(metadata['options']['run'], dict) or isinstance(metadata['options']['run'], list):
+#            for oneRun in metadata['options']['run']:
+#                if run_label_for_fn != '':
+#                    run_label_for_fn += '_'
+#                run_label_for_fn += str(oneRun)
+#        if isinstance(metadata['options']['run'], dict):
+#            run_label_for_fn +='_ls'
+#        if isinstance(metadata['options']['run'], int):
+#            run_label_for_fn = int(metadata['options']['run'])
+#        if isinstance(metadata['options']['run'], str):
+#            run_label_for_fn = metadata['options']['run']
+#
+        run_label_for_fn = ''
+        # if run is int => single label; if run||runLs are list or dict, _-separated composite label
+        if 'run' in metadata['options'] and isinstance( metadata['options']['run'], int):
+            run_label_for_fn = metadata['options']['run']
+        else:
+            # handle the list and dictionary case with the same code snippet
+            thisRunKey = 'run'
+            if 'runLs' in metadata['options']:
+                thisRunKey = 'runLs'
+            for oneRun in metadata['options'][thisRunKey]:
+                if run_label_for_fn != '':
+                    run_label_for_fn += '_'
+                run_label_for_fn += str(oneRun)
+
+                
         try:
-            if metadata['HLT_release']:       
-                commands.append('./wmcontrol.py --req_file HLTConditionValidation_%s_%s_%s.conf' % (metadata['HLT_release'], metadata['options']['basegt'], metadata['options']['run']) )
+            if metadata['HLT_release']:
+                commands.append('./wmcontrol.py --req_file HLTConditionValidation_%s_%s_%s.conf' % (metadata['HLT_release'], metadata['options']['basegt'], run_label_for_fn ) )
         except KeyError:
-            commands.append('./wmcontrol.py --req_file PRConditionValidation_%s_%s_%s.conf' % (metadata['PR_release'], metadata['options']['newgt'], metadata['options']['run']) )
+            commands.append('./wmcontrol.py --req_file PRConditionValidation_%s_%s_%s.conf' % (metadata['PR_release'], metadata['options']['newgt'], run_label_for_fn ) )
         commands.append('rm *.couchID')
         
 
